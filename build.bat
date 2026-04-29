@@ -14,7 +14,7 @@ if errorlevel 1 (
 echo [1/2] Устанавливаю PyInstaller...
 python -m pip install --upgrade pyinstaller --quiet
 echo [2/2] Собираю EXE...
-python -m PyInstaller --onefile --name LaserBoxMaker --hidden-import geometry --hidden-import dxf_writer app.py
+python -m PyInstaller --onefile --name LaserBoxMaker --collect-all tkinter --hidden-import geometry --hidden-import dxf_writer app.py
 echo.
 if exist "dist\LaserBoxMaker.exe" (
     echo  Готово! Файл: dist\LaserBoxMaker.exe
