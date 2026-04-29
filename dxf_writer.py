@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-from .geometry import Segment
+from geometry import Segment
 
 
 def save_dxf(file_path: Path, segments: Iterable[Segment]) -> Path:

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
-from .dxf_writer import save_dxf
-from .geometry import LayoutResult, generate_laser_layout
+from dxf_writer import save_dxf
+from geometry import LayoutResult, generate_laser_layout
 
 
 class BoxForgeApp(tk.Tk):
@@ -210,7 +212,12 @@ class BoxForgeApp(tk.Tk):
     def _open_output_dir(self) -> None:
         folder = Path(self.output_dir_var.get()).expanduser()
         folder.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(folder))
+        if sys.platform == "win32":
+            os.startfile(str(folder))
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(folder)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(folder)], check=False)
 
     def _parse_positive_float(self, raw: str, field_name: str) -> float:
         try:
