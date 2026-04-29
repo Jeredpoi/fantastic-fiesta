@@ -14,7 +14,7 @@ if errorlevel 1 (
 echo [1/2] Устанавливаю PyInstaller...
 python -m pip install --upgrade pyinstaller --quiet
 echo [2/2] Собираю EXE...
-pyinstaller --onefile --windowed --name LaserBoxMaker app.py
+python -m PyInstaller --onefile --windowed --name LaserBoxMaker app.py
 echo.
 if exist "dist\LaserBoxMaker.exe" (
     echo  Готово! Файл: dist\LaserBoxMaker.exe
