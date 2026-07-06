@@ -66,6 +66,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_html(INVALID_LINK, reply_markup=keyboards.main_menu())
         return
 
+    queue: DownloadQueue = context.bot_data["queue"]
+    if queue.draining:
+        await message.reply_html(
+            "🔄 Бот обновляется и сейчас перезапустится. Попробуйте через минуту."
+        )
+        return
+
     limiter: RateLimiter = context.bot_data["limiter"]
     wait = limiter.check(message.from_user.id)
     if wait > 0:
@@ -75,7 +82,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     status = await message.reply_html("⏳ Добавляю в очередь…")
-    queue: DownloadQueue = context.bot_data["queue"]
     job = Job(
         chat_id=message.chat_id,
         user_id=message.from_user.id,

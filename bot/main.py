@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -20,6 +22,7 @@ from . import handlers
 from .config import Config, load_config
 from .db import StatsDB
 from .ratelimit import RateLimiter
+from .updater import RESTART_FLAG, auto_update_loop
 from .worker import DownloadQueue
 
 logger = logging.getLogger(__name__)
@@ -46,10 +49,18 @@ async def on_startup(app: Application) -> None:
     await db.open()
     queue: DownloadQueue = app.bot_data["queue"]
     queue.start(app)
-    logger.info("Бот запущен, воркеров: %d", app.bot_data["cfg"].workers)
+    cfg: Config = app.bot_data["cfg"]
+    if cfg.update_check_hours > 0:
+        app.bot_data["updater_task"] = asyncio.create_task(
+            auto_update_loop(app, cfg.update_check_hours), name="yt-dlp-updater"
+        )
+    logger.info("Бот запущен, воркеров: %d", cfg.workers)
 
 
 async def on_shutdown(app: Application) -> None:
+    updater_task: asyncio.Task | None = app.bot_data.get("updater_task")
+    if updater_task is not None:
+        updater_task.cancel()
     queue: DownloadQueue = app.bot_data["queue"]
     await queue.stop()
     db: StatsDB = app.bot_data["db"]
@@ -105,6 +116,10 @@ def main() -> None:
 
     app = build_application(cfg)
     app.run_polling(allowed_updates=["message", "callback_query"])
+
+    if app.bot_data.get(RESTART_FLAG):
+        logger.info("Перезапускаюсь с обновлённым yt-dlp…")
+        os.execv(sys.executable, [sys.executable, "-m", "bot.main"])
 
 
 if __name__ == "__main__":

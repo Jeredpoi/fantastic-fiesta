@@ -57,6 +57,8 @@ class DownloadQueue:
         self._queue: asyncio.Queue[Job] = asyncio.Queue()
         self._jobs: dict[str, Job] = {}
         self._workers: list[asyncio.Task] = []
+        # True во время обновления: новые задачи не принимаются
+        self.draining = False
 
     def start(self, app: Application) -> None:
         for i in range(self._cfg.workers):
@@ -68,6 +70,10 @@ class DownloadQueue:
             task.cancel()
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
+
+    async def wait_idle(self) -> None:
+        """Ждёт, пока очередь опустеет и все взятые задачи завершатся."""
+        await self._queue.join()
 
     def put(self, job: Job) -> int:
         """Ставит задачу в очередь, возвращает позицию (1 = следующая)."""

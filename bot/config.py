@@ -21,6 +21,7 @@ class Config:
     max_duration_sec: int
     bot_api_url: str | None
     send_timeout_sec: int
+    update_check_hours: int
 
     @property
     def max_file_size_bytes(self) -> int:
@@ -55,6 +56,7 @@ def load_config() -> Config:
         max_duration_sec=_int_env("MAX_DURATION_SEC", 3600),
         bot_api_url=os.getenv("BOT_API_URL", "").strip().rstrip("/") or None,
         send_timeout_sec=_int_env("SEND_TIMEOUT_SEC", 300),
+        update_check_hours=_int_env("UPDATE_CHECK_HOURS", 24),
     )
 
     cfg.temp_dir.mkdir(parents=True, exist_ok=True)
