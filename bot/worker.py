@@ -154,7 +154,10 @@ class DownloadQueue:
             result = await self._with_progress(
                 bot, job, "⏬ Скачиваю видео",
                 dl_state,
-                download_video(job.url, job_dir, self._cfg.max_duration_sec, dl_state),
+                download_video(
+                    job.url, job_dir, self._cfg.max_duration_sec, dl_state,
+                    cookies_file=self._cfg.cookies_file,
+                ),
             )
 
             path = result.path
@@ -208,7 +211,12 @@ class DownloadQueue:
             await self._db.record(job.user_id, job.username, job.url, "ok", size)
 
         except (DownloadError, CompressError) as exc:
-            logger.error("Задача не выполнена (url=%s): %s", job.url, exc)
+            # __cause__ — сырая ошибка yt-dlp/ffmpeg, без неё в errors.log
+            # нечего диагностировать
+            logger.error(
+                "Задача не выполнена (url=%s): %s | raw: %s",
+                job.url, exc, str(exc.__cause__)[:500] if exc.__cause__ else "-",
+            )
             await self._edit_status(bot, job, f"⚠️ {html.escape(str(exc))}", main_menu())
             await self._db.record(job.user_id, job.username, job.url, "error")
         finally:

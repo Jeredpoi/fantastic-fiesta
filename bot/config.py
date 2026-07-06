@@ -22,6 +22,7 @@ class Config:
     bot_api_url: str | None
     send_timeout_sec: int
     update_check_hours: int
+    cookies_file: Path | None
 
     @property
     def max_file_size_bytes(self) -> int:
@@ -57,7 +58,13 @@ def load_config() -> Config:
         bot_api_url=os.getenv("BOT_API_URL", "").strip().rstrip("/") or None,
         send_timeout_sec=_int_env("SEND_TIMEOUT_SEC", 300),
         update_check_hours=_int_env("UPDATE_CHECK_HOURS", 24),
+        cookies_file=(
+            Path(raw).resolve() if (raw := os.getenv("COOKIES_FILE", "").strip()) else None
+        ),
     )
+
+    if cfg.cookies_file is not None and not cfg.cookies_file.is_file():
+        raise SystemExit(f"COOKIES_FILE указан, но файл не найден: {cfg.cookies_file}")
 
     cfg.temp_dir.mkdir(parents=True, exist_ok=True)
     cfg.db_path.parent.mkdir(parents=True, exist_ok=True)

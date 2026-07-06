@@ -8,6 +8,8 @@ tmp/
 data/
 logs/
 *.db
+cookies.txt
+bot.out
 
 # виртуальное окружение
 .venv/

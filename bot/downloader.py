@@ -56,6 +56,13 @@ def extract_supported_url(text: str) -> str | None:
 
 def _classify_error(exc: Exception) -> str:
     msg = str(exc).lower()
+    # проверяем ДО ветки про приватность: в этой ошибке тоже есть «sign in»,
+    # но видео публичное — это YouTube не доверяет IP сервера
+    if "not a bot" in msg or "confirm you" in msg:
+        return (
+            "YouTube требует подтвердить, что мы не бот (IP сервера под подозрением). "
+            "Владельцу бота нужно добавить cookies — см. COOKIES_FILE в README."
+        )
     if "private" in msg or "login" in msg or "sign in" in msg or "cookies" in msg:
         return "Видео приватное или требует входа в аккаунт — скачать не получится."
     if "unavailable" in msg or "not available" in msg or "removed" in msg or "not exist" in msg or "404" in msg:
@@ -74,6 +81,7 @@ async def download_video(
     job_dir: Path,
     max_duration_sec: int,
     progress: ProgressState | None = None,
+    cookies_file: Path | None = None,
 ) -> DownloadResult:
     """Скачивает видео в job_dir (каталог одной задачи, чистит его вызывающий код).
 
@@ -107,6 +115,8 @@ async def download_video(
         # TikTok: yt-dlp сам включает impersonation, если установлен curl_cffi
         # (он в requirements.txt — без него TikTok получает страницу-заглушку).
     }
+    if cookies_file is not None:
+        opts["cookiefile"] = str(cookies_file)
     if progress is not None:
         def _hook(d: dict) -> None:
             if d.get("status") != "downloading":
