@@ -17,11 +17,13 @@ def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
 
-async def _probe_duration(path: Path) -> float:
+async def _probe(path: Path) -> tuple[float, float]:
+    """Возвращает (длительность в секундах, fps видеопотока)."""
     proc = await asyncio.create_subprocess_exec(
         "ffprobe",
         "-v", "error",
-        "-show_entries", "format=duration",
+        "-select_streams", "v:0",
+        "-show_entries", "format=duration:stream=avg_frame_rate",
         "-of", "json",
         str(path),
         stdout=asyncio.subprocess.PIPE,
@@ -29,15 +31,20 @@ async def _probe_duration(path: Path) -> float:
     )
     out, _ = await proc.communicate()
     if proc.returncode != 0:
-        raise CompressError("Не удалось прочитать длительность видео.")
+        raise CompressError("Не удалось прочитать параметры видео.")
     try:
-        return float(json.loads(out)["format"]["duration"])
-    except (KeyError, ValueError, json.JSONDecodeError) as exc:
-        raise CompressError("Не удалось прочитать длительность видео.") from exc
+        data = json.loads(out)
+        duration = float(data["format"]["duration"])
+        rate = (data.get("streams") or [{}])[0].get("avg_frame_rate", "30/1")
+        num, _, den = rate.partition("/")
+        fps = float(num) / float(den or 1) if float(den or 1) else 30.0
+        return duration, fps
+    except (KeyError, ValueError, json.JSONDecodeError, IndexError, ZeroDivisionError) as exc:
+        raise CompressError("Не удалось прочитать параметры видео.") from exc
 
 
-# Максимальное время сжатия — 3 минуты. Если не успело — отправляем оригинал.
-_COMPRESS_TIMEOUT_SEC = 180
+# Минимальный бюджет сжатия; для длинных видео растёт вместе с длительностью
+_COMPRESS_TIMEOUT_MIN_SEC = 180
 
 
 async def compress_to_limit(
@@ -51,7 +58,7 @@ async def compress_to_limit(
     Кидает CompressError, если ужать не получается.
     on_progress, если задан, получает процент готовности (0–100).
     """
-    duration = await _probe_duration(src)
+    duration, src_fps = await _probe(src)
     if duration <= 0:
         raise CompressError("Видео нулевой длительности — сжимать нечего.")
 
@@ -64,6 +71,17 @@ async def compress_to_limit(
         raise CompressError(
             "Видео слишком длинное: даже при минимальном качестве оно не влезет в лимит Telegram."
         )
+
+    # Скейлим ОБЕ стороны (вертикальные TikTok/Shorts 1080x1920 иначе не
+    # уменьшаются вовсе) и принудительно делаем размеры чётными — libx264
+    # падает на нечётной ширине. Не апскейлим: цель не больше исходника.
+    filters = (
+        "scale='min(1280,iw)':'min(1280,ih)'"
+        ":force_original_aspect_ratio=decrease:force_divisible_by=2"
+    )
+    # 30 кадров/с достаточно; для 60fps-видео это минус половина работы кодека
+    if src_fps > 31:
+        filters += ",fps=30"
 
     dst = src.with_name(src.stem + "_compressed.mp4")
     proc = await asyncio.create_subprocess_exec(
@@ -79,9 +97,10 @@ async def compress_to_limit(
         "-b:v", f"{video_kbps}k",
         "-maxrate", f"{video_kbps * 2}k",
         "-bufsize", f"{video_kbps * 4}k",
-        "-vf", "scale='min(1280,iw)':-2",
+        "-vf", filters,
         "-c:a", "aac",
         "-b:a", f"{audio_kbps}k",
+        "-movflags", "+faststart",
         str(dst),
         stdout=asyncio.subprocess.PIPE,
         # DEVNULL для stderr — устраняет риск дедлока (заполненный pipe
@@ -95,31 +114,30 @@ async def compress_to_limit(
             if on_progress is None:
                 continue
             key, _, value = line.decode(errors="ignore").strip().partition("=")
-            if key == "out_time_us":
-                try:
-                    done_sec = int(value) / 1_000_000
-                except ValueError:
-                    continue
-            elif key == "out_time_ms":
-                try:
-                    done_sec = int(value) / 1_000
-                except ValueError:
-                    continue
-            else:
+            # ВНИМАНИЕ: out_time_ms у ffmpeg — исторический баг, это ТОЖЕ
+            # микросекунды (значение идентично out_time_us), а не миллисекунды.
+            if key not in ("out_time_us", "out_time_ms"):
+                continue
+            try:
+                done_sec = int(value) / 1_000_000
+            except ValueError:
                 continue
             on_progress(min(done_sec / duration * 100, 100.0))
 
+    # Бюджет: минимум 3 минуты, для длинных видео — 2x длительности
+    # (ultrafast на слабой VM кодирует примерно в реальном времени)
+    timeout_sec = max(_COMPRESS_TIMEOUT_MIN_SEC, int(duration * 2))
     try:
         # Единый таймаут на чтение прогресса + завершение процесса.
         await asyncio.wait_for(
             asyncio.gather(_drain_stdout(), proc.wait()),
-            timeout=_COMPRESS_TIMEOUT_SEC,
+            timeout=timeout_sec,
         )
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
         raise CompressError(
-            f"Сжатие превысило лимит {_COMPRESS_TIMEOUT_SEC // 60} минут — "
+            f"Сжатие не уложилось в {timeout_sec // 60} мин — "
             "видео слишком длинное для этого сервера."
         )
 

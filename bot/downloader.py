@@ -82,8 +82,8 @@ async def download_video(
     job_dir.mkdir(parents=True, exist_ok=True)
 
     opts = {
-        # Универсальный формат: лучшее видео + лучший аудио, на выходе всегда mp4
-        "format": "bestvideo*+bestaudio/best",
+        # До 1080p, чтобы реже требовалось сжатие; если таких форматов нет — любой лучший
+        "format": "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b",
         "outtmpl": str(job_dir / "%(title).100s [%(id)s].%(ext)s"),
         "merge_output_format": "mp4",
         "noplaylist": True,
@@ -100,13 +100,12 @@ async def download_video(
             "key": "FFmpegVideoRemuxer",
             "preferedformat": "mp4",
         }],
-        # YouTube: обходим «Sign in to confirm you're not a bot» через мобильный клиент
-        # TikTok: curl_cffi (установлен) используется yt-dlp автоматически для impersonation
-        # Instagram/VK: актуальная версия yt-dlp решает большинство проблем
-        "extractor_args": {
-            "youtube": {"player_client": ["ios", "android", "web"]},
-            "tiktok": {"app_name": ["tiktok_web"], "app_version": ["27.0.0"]},
-        },
+        # ВАЖНО: player_client и app_name НЕ переопределяем.
+        # Мейнтейнеры yt-dlp подбирают рабочие клиенты под текущие блокировки
+        # (сейчас это android_vr + web_safari); зашитый здесь список устаревает
+        # за пару месяцев и ломает YouTube/Shorts («Sign in to confirm…»).
+        # TikTok: yt-dlp сам включает impersonation, если установлен curl_cffi
+        # (он в requirements.txt — без него TikTok получает страницу-заглушку).
     }
     if progress is not None:
         def _hook(d: dict) -> None:

@@ -173,6 +173,10 @@ class DownloadQueue:
                         compress_to_limit(path, self._cfg.max_file_size_bytes, _on_compress),
                     )
                 except CompressError as exc:
+                    if not self._cfg.bot_api_url:
+                        # официальный API всё равно отвергнет файл больше лимита —
+                        # честнее сразу показать причину, чем ждать отказа Telegram
+                        raise
                     logger.warning("Сжатие не удалось (url=%s): %s — отправляю оригинал", job.url, exc)
                     compress_warning = str(exc)
                     # path остаётся оригинальным файлом
