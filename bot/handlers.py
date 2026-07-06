@@ -61,6 +61,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if message is None or not message.text:
         return
 
+    if message.from_user is None:
+        return
+
     url = extract_supported_url(message.text)
     if url is None:
         await message.reply_html(INVALID_LINK, reply_markup=keyboards.main_menu())

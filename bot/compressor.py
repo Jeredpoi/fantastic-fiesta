@@ -36,6 +36,10 @@ async def _probe_duration(path: Path) -> float:
         raise CompressError("Не удалось прочитать длительность видео.") from exc
 
 
+# Максимальное время сжатия — 3 минуты. Если не успело — отправляем оригинал.
+_COMPRESS_TIMEOUT_SEC = 180
+
+
 async def compress_to_limit(
     src: Path,
     limit_bytes: int,
@@ -69,36 +73,58 @@ async def compress_to_limit(
         "-progress", "pipe:1",
         "-i", str(src),
         "-c:v", "libx264",
-        "-preset", "fast",
+        # ultrafast в 3-5 раз быстрее fast при незначительно большем размере.
+        # Для сжатия под лимит Telegram качество вторично — важна скорость.
+        "-preset", "ultrafast",
         "-b:v", f"{video_kbps}k",
-        "-maxrate", f"{video_kbps}k",
-        "-bufsize", f"{video_kbps * 2}k",
+        "-maxrate", f"{video_kbps * 2}k",
+        "-bufsize", f"{video_kbps * 4}k",
         "-vf", "scale='min(1280,iw)':-2",
         "-c:a", "aac",
         "-b:a", f"{audio_kbps}k",
-        "-movflags", "+faststart",
         str(dst),
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        # DEVNULL для stderr — устраняет риск дедлока (заполненный pipe
+        # блокирует ffmpeg, что блокирует наш stdout-reader).
+        stderr=asyncio.subprocess.DEVNULL,
     )
 
-    # stderr читаем параллельно, иначе заполненный пайп заблокирует ffmpeg
-    stderr_task = asyncio.create_task(proc.stderr.read())
-
-    # stdout — строки вида "out_time_us=1234567" (ffmpeg-овский формат -progress)
-    while line := await proc.stdout.readline():
-        key, _, value = line.decode(errors="ignore").strip().partition("=")
-        if key in ("out_time_us", "out_time_ms") and on_progress is not None:
-            try:
-                done_sec = int(value) / 1_000_000
-            except ValueError:
+    async def _drain_stdout() -> None:
+        """Читает progress-строки и обновляет on_progress."""
+        while line := await proc.stdout.readline():
+            if on_progress is None:
+                continue
+            key, _, value = line.decode(errors="ignore").strip().partition("=")
+            if key == "out_time_us":
+                try:
+                    done_sec = int(value) / 1_000_000
+                except ValueError:
+                    continue
+            elif key == "out_time_ms":
+                try:
+                    done_sec = int(value) / 1_000
+                except ValueError:
+                    continue
+            else:
                 continue
             on_progress(min(done_sec / duration * 100, 100.0))
 
-    await proc.wait()
-    err = await stderr_task
+    try:
+        # Единый таймаут на чтение прогресса + завершение процесса.
+        await asyncio.wait_for(
+            asyncio.gather(_drain_stdout(), proc.wait()),
+            timeout=_COMPRESS_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise CompressError(
+            f"Сжатие превысило лимит {_COMPRESS_TIMEOUT_SEC // 60} минут — "
+            "видео слишком длинное для этого сервера."
+        )
+
     if proc.returncode != 0:
-        raise CompressError(f"ffmpeg завершился с ошибкой: {err.decode(errors='ignore')[-300:]}")
+        raise CompressError("ffmpeg завершился с ошибкой при сжатии.")
 
     if not dst.exists() or dst.stat().st_size == 0:
         raise CompressError("ffmpeg не создал выходной файл.")

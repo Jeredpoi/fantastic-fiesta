@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yt_dlp
 
+_VIDEO_SUFFIXES = {".mp4", ".mkv", ".webm", ".mov"}
+
 
 @dataclass
 class ProgressState:
@@ -56,11 +58,13 @@ def _classify_error(exc: Exception) -> str:
     msg = str(exc).lower()
     if "private" in msg or "login" in msg or "sign in" in msg or "cookies" in msg:
         return "Видео приватное или требует входа в аккаунт — скачать не получится."
-    if "unavailable" in msg or "removed" in msg or "not exist" in msg or "404" in msg:
+    if "unavailable" in msg or "not available" in msg or "removed" in msg or "not exist" in msg or "404" in msg:
         return "Видео недоступно: удалено, скрыто или ссылка битая."
-    if "unsupported url" in msg:
+    if "blocked" in msg or "ip address" in msg:
+        return "Сервис заблокировал наш IP. Попробуйте ещё раз позже или попробуйте другую ссылку."
+    if "unsupported" in msg:
         return "Эта ссылка не поддерживается."
-    if "live" in msg:
+    if "live event" in msg or "is live" in msg or "live stream" in msg or "ongoing live" in msg:
         return "Прямые трансляции скачивать нельзя, дождитесь окончания."
     return "Не удалось скачать видео. Проверьте ссылку и попробуйте ещё раз."
 
@@ -78,17 +82,31 @@ async def download_video(
     job_dir.mkdir(parents=True, exist_ok=True)
 
     opts = {
-        # mp4 до 1080p, чтобы файл сразу был поменьше и Telegram его проигрывал
-        "format": "bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4]/b",
-        "outtmpl": str(job_dir / "%(id)s.%(ext)s"),
+        # Универсальный формат: лучшее видео + лучший аудио, на выходе всегда mp4
+        "format": "bestvideo*+bestaudio/best",
+        "outtmpl": str(job_dir / "%(title).100s [%(id)s].%(ext)s"),
         "merge_output_format": "mp4",
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
         "restrictfilenames": True,
-        "max_downloads": 1,
         "socket_timeout": 30,
         "retries": 3,
+        "continuedl": True,
+        "http_chunk_size": 10 * 1024 * 1024,
+        # Гарантируем использование ffmpeg и ремуксинг в mp4
+        "prefer_ffmpeg": True,
+        "postprocessors": [{
+            "key": "FFmpegVideoRemuxer",
+            "preferedformat": "mp4",
+        }],
+        # YouTube: обходим «Sign in to confirm you're not a bot» через мобильный клиент
+        # TikTok: curl_cffi (установлен) используется yt-dlp автоматически для impersonation
+        # Instagram/VK: актуальная версия yt-dlp решает большинство проблем
+        "extractor_args": {
+            "youtube": {"player_client": ["ios", "android", "web"]},
+            "tiktok": {"app_name": ["tiktok_web"], "app_version": ["27.0.0"]},
+        },
     }
     if progress is not None:
         def _hook(d: dict) -> None:
@@ -97,7 +115,10 @@ async def download_video(
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
             progress.downloaded = d.get("downloaded_bytes") or 0
             progress.total = total
-            progress.percent = progress.downloaded / total * 100 if total else None
+            if total:
+                progress.percent = min(progress.downloaded / total * 100, 100.0)
+            else:
+                progress.percent = None
 
         opts["progress_hooks"] = [_hook]
     if max_duration_sec > 0:
@@ -112,13 +133,13 @@ async def download_video(
             raise DownloadError(
                 "Видео не прошло фильтр (возможно, оно длиннее разрешённого лимита)."
             )
-        files = sorted(job_dir.glob("*"), key=lambda p: p.stat().st_size, reverse=True)
+        # Ищем только видеофайлы, игнорируем .part / .ytdl / .info.json и т.д.
+        files = sorted(
+            (p for p in job_dir.iterdir() if p.suffix.lower() in _VIDEO_SUFFIXES),
+            key=lambda p: p.stat().st_size,
+            reverse=True,
+        )
         if not files:
-            duration = info.get("duration")
-            if max_duration_sec > 0 and duration and duration > max_duration_sec:
-                raise DownloadError(
-                    f"Видео длиннее лимита ({max_duration_sec // 60} мин) — скачивание отклонено."
-                )
             raise DownloadError("yt-dlp не сохранил файл — попробуйте другую ссылку.")
         return DownloadResult(path=files[0], title=info.get("title") or "video")
 
@@ -126,7 +147,7 @@ async def download_video(
         return await asyncio.to_thread(_run)
     except DownloadError:
         raise
-    except yt_dlp.utils.MaxDownloadsReached as exc:  # плейлист вместо одного видео
+    except yt_dlp.utils.MaxDownloadsReached as exc:
         raise DownloadError("Пришлите ссылку на одно видео, а не на плейлист.") from exc
     except Exception as exc:
         raise DownloadError(_classify_error(exc)) from exc

@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from telegram import Bot
-from telegram.error import TelegramError
+from telegram.error import TelegramError, NetworkError, TimedOut
 from telegram.ext import Application
 
 from .compressor import CompressError, compress_to_limit
@@ -158,6 +158,7 @@ class DownloadQueue:
             )
 
             path = result.path
+            compress_warning: str | None = None
             if path.stat().st_size > self._cfg.max_file_size_bytes:
                 size_mb = path.stat().st_size / 1024 / 1024
                 cmp_state = ProgressState()
@@ -165,23 +166,40 @@ class DownloadQueue:
                 def _on_compress(percent: float) -> None:
                     cmp_state.percent = percent
 
-                path = await self._with_progress(
-                    bot, job, f"🗜 Файл {size_mb:.0f} МБ — сжимаю",
-                    cmp_state,
-                    compress_to_limit(path, self._cfg.max_file_size_bytes, _on_compress),
-                )
+                try:
+                    path = await self._with_progress(
+                        bot, job, f"🗜 Файл {size_mb:.0f} МБ — сжимаю",
+                        cmp_state,
+                        compress_to_limit(path, self._cfg.max_file_size_bytes, _on_compress),
+                    )
+                except CompressError as exc:
+                    logger.warning("Сжатие не удалось (url=%s): %s — отправляю оригинал", job.url, exc)
+                    compress_warning = str(exc)
+                    # path остаётся оригинальным файлом
 
             await self._edit_status(bot, job, "📤 Отправляю…")
             size = path.stat().st_size
-            with path.open("rb") as fh:
-                await bot.send_video(
-                    chat_id=job.chat_id,
-                    video=fh,
-                    caption=result.title[:1000],
-                    supports_streaming=True,
-                    read_timeout=self._cfg.send_timeout_sec,
-                    write_timeout=self._cfg.send_timeout_sec,
-                )
+            caption = result.title[:900]
+            if compress_warning:
+                caption += f"\n\n⚠️ Сжать не удалось, отправляю оригинал ({size / 1048576:.0f} МБ)."
+            try:
+                with path.open("rb") as fh:
+                    await bot.send_video(
+                        chat_id=job.chat_id,
+                        video=fh,
+                        caption=caption,
+                        supports_streaming=True,
+                        read_timeout=self._cfg.send_timeout_sec,
+                        write_timeout=self._cfg.send_timeout_sec,
+                    )
+            except (TimedOut, NetworkError) as exc:
+                raise CompressError(
+                    "Не удалось отправить видео — проблема с сетью. Попробуйте ещё раз."
+                ) from exc
+            except TelegramError as exc:
+                raise CompressError(
+                    f"Telegram отклонил файл: {exc.message}"
+                ) from exc
             await self._edit_status(bot, job, "✅ Готово! Пришлите следующую ссылку.", main_menu())
             await self._db.record(job.user_id, job.username, job.url, "ok", size)
 
