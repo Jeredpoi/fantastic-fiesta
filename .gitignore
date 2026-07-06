@@ -1,6 +1,14 @@
 __pycache__/
 *.pyc
 *.pyo
-*.spec
-build/
-dist/
+
+# секреты и локальные данные
+.env
+tmp/
+data/
+logs/
+*.db
+
+# виртуальное окружение
+.venv/
+venv/
