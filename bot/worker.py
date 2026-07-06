@@ -157,6 +157,7 @@ class DownloadQueue:
                 download_video(
                     job.url, job_dir, self._cfg.max_duration_sec, dl_state,
                     cookies_file=self._cfg.cookies_file,
+                    proxy_url=self._cfg.proxy_url,
                 ),
             )
 

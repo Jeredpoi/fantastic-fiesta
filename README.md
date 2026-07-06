@@ -56,6 +56,7 @@ python -m bot.main
 | `SEND_TIMEOUT_SEC` | `300` | Таймаут отправки видео (увеличьте для больших файлов) |
 | `UPDATE_CHECK_HOURS` | `24` | Как часто проверять обновления yt-dlp (0 — отключить) |
 | `COOKIES_FILE` | — | Файл cookies.txt для YouTube/Instagram (см. ниже) |
+| `PROXY_URL` | — | Прокси для yt-dlp (`http://…` или `socks5://…`), обход бот-чека без cookies |
 
 ## YouTube пишет «требует подтвердить, что мы не бот»
 

@@ -23,6 +23,7 @@ class Config:
     send_timeout_sec: int
     update_check_hours: int
     cookies_file: Path | None
+    proxy_url: str | None
 
     @property
     def max_file_size_bytes(self) -> int:
@@ -61,6 +62,7 @@ def load_config() -> Config:
         cookies_file=(
             Path(raw).resolve() if (raw := os.getenv("COOKIES_FILE", "").strip()) else None
         ),
+        proxy_url=os.getenv("PROXY_URL", "").strip() or None,
     )
 
     if cfg.cookies_file is not None and not cfg.cookies_file.is_file():

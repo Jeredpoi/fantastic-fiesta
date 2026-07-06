@@ -82,6 +82,7 @@ async def download_video(
     max_duration_sec: int,
     progress: ProgressState | None = None,
     cookies_file: Path | None = None,
+    proxy_url: str | None = None,
 ) -> DownloadResult:
     """Скачивает видео в job_dir (каталог одной задачи, чистит его вызывающий код).
 
@@ -117,6 +118,10 @@ async def download_video(
     }
     if cookies_file is not None:
         opts["cookiefile"] = str(cookies_file)
+    if proxy_url is not None:
+        # запросы к видеосервисам идут через прокси: чужой IP не вызывает
+        # у YouTube проверку «не бот», свойственную адресам хостингов
+        opts["proxy"] = proxy_url
     if progress is not None:
         def _hook(d: dict) -> None:
             if d.get("status") != "downloading":
