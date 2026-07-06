@@ -61,7 +61,7 @@ async def on_shutdown(app: Application) -> None:
 
 
 def build_application(cfg: Config) -> Application:
-    app = (
+    builder = (
         ApplicationBuilder()
         .token(cfg.bot_token)
         .connect_timeout(30)
@@ -69,8 +69,14 @@ def build_application(cfg: Config) -> Application:
         .write_timeout(60)
         .post_init(on_startup)
         .post_shutdown(on_shutdown)
-        .build()
     )
+    if cfg.bot_api_url:
+        # локальный telegram-bot-api server: лимит на файлы вырастает до 2 ГБ
+        builder = builder.base_url(f"{cfg.bot_api_url}/bot").base_file_url(
+            f"{cfg.bot_api_url}/file/bot"
+        )
+        logger.info("Использую локальный Bot API server: %s", cfg.bot_api_url)
+    app = builder.build()
 
     db = StatsDB(cfg.db_path)
     app.bot_data["cfg"] = cfg

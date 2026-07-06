@@ -6,6 +6,7 @@ import asyncio
 import json
 import shutil
 from pathlib import Path
+from typing import Callable
 
 
 class CompressError(Exception):
@@ -35,11 +36,16 @@ async def _probe_duration(path: Path) -> float:
         raise CompressError("Не удалось прочитать длительность видео.") from exc
 
 
-async def compress_to_limit(src: Path, limit_bytes: int) -> Path:
+async def compress_to_limit(
+    src: Path,
+    limit_bytes: int,
+    on_progress: Callable[[float], None] | None = None,
+) -> Path:
     """Пережимает src так, чтобы результат влез в limit_bytes.
 
     Возвращает путь к новому файлу рядом с исходным.
     Кидает CompressError, если ужать не получается.
+    on_progress, если задан, получает процент готовности (0–100).
     """
     duration = await _probe_duration(src)
     if duration <= 0:
@@ -59,6 +65,8 @@ async def compress_to_limit(src: Path, limit_bytes: int) -> Path:
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg",
         "-y",
+        "-nostats",
+        "-progress", "pipe:1",
         "-i", str(src),
         "-c:v", "libx264",
         "-preset", "fast",
@@ -70,10 +78,25 @@ async def compress_to_limit(src: Path, limit_bytes: int) -> Path:
         "-b:a", f"{audio_kbps}k",
         "-movflags", "+faststart",
         str(dst),
-        stdout=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    _, err = await proc.communicate()
+
+    # stderr читаем параллельно, иначе заполненный пайп заблокирует ffmpeg
+    stderr_task = asyncio.create_task(proc.stderr.read())
+
+    # stdout — строки вида "out_time_us=1234567" (ffmpeg-овский формат -progress)
+    while line := await proc.stdout.readline():
+        key, _, value = line.decode(errors="ignore").strip().partition("=")
+        if key in ("out_time_us", "out_time_ms") and on_progress is not None:
+            try:
+                done_sec = int(value) / 1_000_000
+            except ValueError:
+                continue
+            on_progress(min(done_sec / duration * 100, 100.0))
+
+    await proc.wait()
+    err = await stderr_task
     if proc.returncode != 0:
         raise CompressError(f"ffmpeg завершился с ошибкой: {err.decode(errors='ignore')[-300:]}")
 

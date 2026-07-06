@@ -16,8 +16,22 @@ from telegram.ext import Application
 from .compressor import CompressError, compress_to_limit
 from .config import Config
 from .db import StatsDB
-from .downloader import DownloadError, download_video
+from .downloader import DownloadError, ProgressState, download_video
 from .keyboards import main_menu
+
+# как часто обновляем статусное сообщение (Telegram не любит частые edit)
+PROGRESS_INTERVAL_SEC = 2.5
+
+
+def _format_progress(label: str, state: ProgressState) -> str:
+    if state.percent is not None:
+        text = f"{label} {state.percent:.0f}%"
+        if state.total:
+            text += f" ({state.downloaded / 1048576:.1f}/{state.total / 1048576:.1f} МБ)"
+        return text
+    if state.downloaded:
+        return f"{label} {state.downloaded / 1048576:.1f} МБ"
+    return f"{label}…"
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +99,26 @@ class DownloadQueue:
             # сообщение могли удалить или текст не изменился — статус не критичен
             pass
 
+    async def _progress_updater(self, bot: Bot, job: Job, label: str, state: ProgressState) -> None:
+        """Фоново обновляет статусное сообщение, пока идёт скачивание/сжатие."""
+        last_text = ""
+        while True:
+            await asyncio.sleep(PROGRESS_INTERVAL_SEC)
+            text = _format_progress(label, state)
+            if text != last_text:
+                last_text = text
+                await self._edit_status(bot, job, text)
+
+    async def _with_progress(self, bot: Bot, job: Job, label: str, state: ProgressState, coro):
+        """Выполняет coro, параллельно показывая прогресс из state."""
+        task = asyncio.ensure_future(coro)
+        updater = asyncio.ensure_future(self._progress_updater(bot, job, label, state))
+        await self._edit_status(bot, job, f"{label}…")
+        try:
+            return await task
+        finally:
+            updater.cancel()
+
     async def _worker(self, bot: Bot) -> None:
         while True:
             job = await self._queue.get()
@@ -110,16 +144,26 @@ class DownloadQueue:
 
         job_dir = self._cfg.temp_dir / job.id
         try:
-            await self._edit_status(bot, job, "⏬ Скачиваю видео…")
-            result = await download_video(job.url, job_dir, self._cfg.max_duration_sec)
+            dl_state = ProgressState()
+            result = await self._with_progress(
+                bot, job, "⏬ Скачиваю видео",
+                dl_state,
+                download_video(job.url, job_dir, self._cfg.max_duration_sec, dl_state),
+            )
 
             path = result.path
             if path.stat().st_size > self._cfg.max_file_size_bytes:
                 size_mb = path.stat().st_size / 1024 / 1024
-                await self._edit_status(
-                    bot, job, f"🗜 Файл {size_mb:.0f} МБ — сжимаю под лимит Telegram…"
+                cmp_state = ProgressState()
+
+                def _on_compress(percent: float) -> None:
+                    cmp_state.percent = percent
+
+                path = await self._with_progress(
+                    bot, job, f"🗜 Файл {size_mb:.0f} МБ — сжимаю",
+                    cmp_state,
+                    compress_to_limit(path, self._cfg.max_file_size_bytes, _on_compress),
                 )
-                path = await compress_to_limit(path, self._cfg.max_file_size_bytes)
 
             await self._edit_status(bot, job, "📤 Отправляю…")
             size = path.stat().st_size
@@ -129,8 +173,8 @@ class DownloadQueue:
                     video=fh,
                     caption=result.title[:1000],
                     supports_streaming=True,
-                    read_timeout=300,
-                    write_timeout=300,
+                    read_timeout=self._cfg.send_timeout_sec,
+                    write_timeout=self._cfg.send_timeout_sec,
                 )
             await self._edit_status(bot, job, "✅ Готово! Пришлите следующую ссылку.", main_menu())
             await self._db.record(job.user_id, job.username, job.url, "ok", size)

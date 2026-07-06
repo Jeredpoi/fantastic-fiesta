@@ -19,6 +19,8 @@ class Config:
     rate_limit_per_minute: int
     workers: int
     max_duration_sec: int
+    bot_api_url: str | None
+    send_timeout_sec: int
 
     @property
     def max_file_size_bytes(self) -> int:
@@ -51,6 +53,8 @@ def load_config() -> Config:
         rate_limit_per_minute=_int_env("RATE_LIMIT_PER_MINUTE", 3),
         workers=max(1, _int_env("WORKERS", 2)),
         max_duration_sec=_int_env("MAX_DURATION_SEC", 3600),
+        bot_api_url=os.getenv("BOT_API_URL", "").strip().rstrip("/") or None,
+        send_timeout_sec=_int_env("SEND_TIMEOUT_SEC", 300),
     )
 
     cfg.temp_dir.mkdir(parents=True, exist_ok=True)

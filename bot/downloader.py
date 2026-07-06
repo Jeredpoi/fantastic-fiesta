@@ -9,6 +9,18 @@ from pathlib import Path
 
 import yt_dlp
 
+
+@dataclass
+class ProgressState:
+    """Текущий прогресс задачи. Пишется из рабочего потока, читается из event loop.
+
+    Присваивание атрибутов атомарно под GIL, поэтому блокировка не нужна.
+    """
+
+    percent: float | None = None
+    downloaded: int = 0
+    total: int | None = None
+
 SUPPORTED_HOSTS = (
     r"(?:www\.|m\.)?youtube\.com",
     r"youtu\.be",
@@ -53,7 +65,12 @@ def _classify_error(exc: Exception) -> str:
     return "Не удалось скачать видео. Проверьте ссылку и попробуйте ещё раз."
 
 
-async def download_video(url: str, job_dir: Path, max_duration_sec: int) -> DownloadResult:
+async def download_video(
+    url: str,
+    job_dir: Path,
+    max_duration_sec: int,
+    progress: ProgressState | None = None,
+) -> DownloadResult:
     """Скачивает видео в job_dir (каталог одной задачи, чистит его вызывающий код).
 
     Блокирующий yt-dlp уходит в отдельный поток.
@@ -73,6 +90,16 @@ async def download_video(url: str, job_dir: Path, max_duration_sec: int) -> Down
         "socket_timeout": 30,
         "retries": 3,
     }
+    if progress is not None:
+        def _hook(d: dict) -> None:
+            if d.get("status") != "downloading":
+                return
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            progress.downloaded = d.get("downloaded_bytes") or 0
+            progress.total = total
+            progress.percent = progress.downloaded / total * 100 if total else None
+
+        opts["progress_hooks"] = [_hook]
     if max_duration_sec > 0:
         opts["match_filter"] = yt_dlp.utils.match_filter_func(
             f"duration <= {max_duration_sec}"
